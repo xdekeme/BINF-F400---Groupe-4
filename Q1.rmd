@@ -1,0 +1,684 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+[Link to the instructions of the project](https://owncloud.ulb.ac.be/index.php/s/an85YFknNiDQXGA?path=%2Fresources#pdfviewer)
+
+```{r}
+library(readr)
+library(ggplot2)
+library(cowplot)
+library(reshape2)
+library(tidyr)
+```
+
+# Clinical dataframe analysis
+
+```{r}
+df_clinical<- read.delim("./TSV_files/raw/clinical_data.tsv") #Your path here
+
+head(df_clinical, n = 10)
+
+dim(df_clinical)
+
+summary(df_clinical)
+
+```
+
+```{r}
+print(names(df_clinical))
+
+```
+
+```{r}
+# Histograms
+
+
+ggplot(df_clinical, aes(x = AGE)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(x = "Age", y = "Frequency", title = "Histogram of Age")
+
+ggplot(df_clinical, aes(x = HGHT)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(x = "Height", y = "Frequency", title = "Histogram of height")
+
+ggplot(df_clinical, aes(x = WGHT)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(x = "Weight", y = "Frequency", title = "Histogram of weight")
+
+ggplot(df_clinical, aes(x = BMI)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(x = "BMI", y = "Frequency", title = "Histogram of BMI")
+
+ggplot(df_clinical, aes(x = TRISCHD)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(x = "TRISCHD", y = "Frequency", title = "Histogram of TRISCHD")
+
+
+```
+
+
+
+
+Useless columns : SMPLID, SUBJID, SMPTHNTS, SMPLID.1 \n
+
+Numerical columns : AGE, HGHT, WGHT, BMI, TRISCHD \n
+
+Categorical columns : COHORT, SEX, DTHVNT, DTHHRDY
+
+# Boxplots
+
+```{r}
+columns_to_plot <- df_clinical[, c("AGE", "HGHT", "WGHT", "BMI", 'TRISCHD')]
+
+par(mfrow=c(1,5))
+
+for (col in colnames(columns_to_plot)) {
+  boxplot(columns_to_plot[, col], main=col)
+}
+
+```
+
+
+## Impact of categorical variables
+
+Let's invest the boxplots of the different numerical variables based on the different categorical variables
+
+### Impact of COHORT
+
+```{r}
+df_clinical$COHORT <- as.factor(df_clinical$COHORT)
+
+df_long <- melt(df_clinical, id.vars = "COHORT", measure.vars = c("AGE", "HGHT", "WGHT", "BMI", "TRISCHD"))
+
+ggplot(df_long, aes(x = '', y = value, fill = COHORT)) +
+  geom_boxplot(position = position_dodge(width = 0.75), alpha = 0.5) +
+  facet_wrap(~ variable, nrow = 1, scales = "free_y") +  
+  labs(x = "", y = "Value", title = "Boxplots of Each Numerical Variable Colored by COHORT",
+       fill = "Cohort: 
+Organ Donor (OPO) 
+Postmortem") +  
+  scale_fill_manual(values = c("blue", "red")) +  
+  theme_minimal() +
+  theme(legend.position = "bottom",  
+        legend.title = element_text(face = "bold"))  
+
+```
+
+
+### Impact of SEX
+
+```{r}
+df_clinical$SEX <- as.factor(df_clinical$SEX)
+
+df_long <- pivot_longer(df_clinical, 
+                        cols = c("AGE", "HGHT", "WGHT", "BMI", "TRISCHD"), 
+                        names_to = "variable", 
+                        values_to = "value")
+
+ggplot(df_long, aes(x = "", y = value, fill = SEX)) +
+  geom_boxplot(position = position_dodge(0.75), alpha = 0.5) +
+  facet_wrap(~ variable, nrow = 1, scales = "free_y") +
+  labs(
+    x = "", 
+    y = "Value", 
+    title = "Boxplots of Each Numerical Variable Colored by SEX",
+    fill = "Sex:
+1 = Male
+2 = Female " 
+  ) +
+  scale_fill_manual(values = c("blue", "red")) +  
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",  
+    legend.title = element_text(face = "bold")  
+  )
+
+
+```
+
+### Impact of DTHVNT 
+
+```{r warning=FALSE}
+df_clinical$DTHVNT <- as.factor(df_clinical$DTHVNT)
+
+df_clinical_filtered <- df_clinical[!(df_clinical$DTHVNT %in% c("NA", "99")), ]
+
+df_long <- pivot_longer(df_clinical_filtered, 
+                        cols = c("AGE", "HGHT", "WGHT", "BMI", "TRISCHD"), 
+                        names_to = "variable", 
+                        values_to = "value")
+
+ggplot(df_long, aes(x = "", y = value, fill = DTHVNT)) +
+  geom_boxplot(position = position_dodge(0.9), alpha = 0.5) +
+  facet_wrap(~ variable, nrow = 1, scales = "free_y") +
+  labs(
+    x = "", 
+    y = "Value", 
+    title = "Boxplots of Each Numerical variable Colored by DTHVNT",
+    fill = "Donor On A Ventilator Immediately Prior To Death:
+0 = No
+1 = Yes"
+  ) +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+
+
+```
+
+### Impact of DTHHRDY
+
+```{r}
+df_clinical$DTHHRDY <- as.factor(df_clinical$DTHHRDY)
+
+df_long <- pivot_longer(df_clinical, 
+                        cols = c("AGE", "HGHT", "WGHT", "BMI", "TRISCHD"), 
+                        names_to = "variable", 
+                        values_to = "value")
+
+ggplot(df_long, aes(x = "", y = value, fill = DTHHRDY)) +
+  geom_boxplot(position = position_dodge(width = 0.9), alpha = 0.5) +  
+  facet_wrap(~ variable, nrow = 1, scales = "free_y") +  
+  labs(
+    x = "", 
+    y = "Value", 
+    title = "Boxplots of Each Numerical Variable Colored by DTHHRDY",
+    fill = "	Hardy Scale: 
+0 = Ventilator Case
+1 = Violent and fast death
+2 = Fast death of natural causes
+3 = Intermediate death
+4 = Slow death"  
+  ) +
+  scale_fill_manual(values = c("blue", "red", "green", "yellow", "gray")) +  
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",  
+    legend.title = element_text(face = "bold"),  
+    panel.spacing = unit(1, "lines"),  
+    strip.background = element_blank(),  
+    strip.text = element_text(size = 12, face = "bold")  
+  )
+
+```
+
+# Pair plots
+
+We can use pair plots to display all the pair comparisons between the numerical variables.
+
+```{r}
+columns_to_plot <- df_clinical[, c("AGE", "HGHT", "WGHT", "BMI", 'TRISCHD')]
+
+pairs(columns_to_plot)
+
+```
+
+## Impact of categorical variables
+
+## Impact of COHORT
+
+```{r}
+
+pairs(columns_to_plot, col = ifelse(df_clinical$COHORT == "Postmortem", "red", "blue"),
+      main = "Scatterplots of the impact of COHORT on numerical variables")
+
+```
+
+
+## Impact of SEX
+
+```{r}
+
+pairs(columns_to_plot, col = ifelse(df_clinical$SEX == 1, "blue", "red"),
+      main = "Scatterplots of the impact of SEX on numerical variables")
+
+```
+
+### Impact of DTHVNT
+
+```{r}
+color_values <- c(0, 1)
+color_palette <- c("blue", "red")
+
+category_colors_vector <- color_palette[match(df_clinical$DTHVNT, color_values)]
+
+
+pairs(columns_to_plot, col = category_colors_vector,
+      main = "Scatterplots of the impact of DTHVNT on numerical variables")
+
+```
+
+### Impact of DTHRRDY
+
+```{r}
+color_values <- c(0, 1, 2, 3, 4)
+color_palette <- c("blue", "red", "green", "yellow", "gray")
+
+category_colors_vector <- color_palette[match(df_clinical$DTHHRDY, color_values)]
+
+
+pairs(columns_to_plot, col = category_colors_vector,
+      main = "Scatterplots of the impact of DTHHRDY on numerical variables")
+
+```
+
+
+
+
+
+
+
+# Correlation
+
+```{r}
+cleaned_df <- df_clinical[!(is.na(df_clinical$DTHVNT) | df_clinical$DTHVNT == 99), ]
+create_correlation_heatmap <- function(input_df, title) {
+  numerical_df <- input_df[, c("AGE", "HGHT", "WGHT","BMI", "TRISCHD")]
+  
+  correlation_matrix <- cor(numerical_df)
+
+  melted_correlation <- melt(correlation_matrix)
+  
+  y_order <- rev(levels(as.factor(melted_correlation$Var2)))
+  
+  ggplot(melted_correlation, aes(Var1, Var2, fill = value, label = round(value, 2))) +
+    geom_tile(color = "white") +
+    geom_text(color = "black", size = 3) +  
+    scale_fill_gradient(low = "white", high = "blue", na.value = "white") +
+    labs(x = "Variables", y = "Variables", fill = "Correlation") +
+    ggtitle(title) +
+    scale_y_discrete(limits = y_order) +  
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+
+correlation_heatmap <- create_correlation_heatmap(cleaned_df, "Correlation Matrix of Numerical Variables")
+print(correlation_heatmap)
+```
+
+
+# Dimension reduction
+
+## Normalization of the numerical variables
+
+This allows numerical varialbes to have the same impact in the PCA, otherwise TRISCHD would be way to important
+
+```{r}
+print(head(columns_to_plot))
+
+normalize_df <- function(df) {
+  normalized_df <- as.data.frame(lapply(df, function(x) (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))))
+  return(normalized_df)
+}
+
+normalized_df <- normalize_df(columns_to_plot)
+
+print(head(normalized_df))
+```
+
+## Contribution of dimensions to variance explanation
+
+```{r}
+pca_result <- prcomp(normalized_df, scale. = FALSE)
+
+variance_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2) * 100
+
+pca_summary <- data.frame(
+  Dim = paste("PC", seq_along(variance_explained)),
+  `Explained Variance` = variance_explained,
+  `Summed Variance` = cumsum(variance_explained)
+)
+
+print(pca_summary)
+```
+
+## Contribution of numerical varialbes in each PCA dimension
+
+```{r}
+loadings <- pca_result$rotation
+
+variable_contributions <- abs(loadings) / rowSums(abs(loadings)) * 100
+
+print(variable_contributions)
+```
+
+## Scatter plot in the new space
+
+```{r}
+
+pc_space <- as.matrix(normalized_df) %*% pca_result$rotation[, 1:3]
+
+
+plot(pc_space[,1], pc_space[,2], 
+     xlab = "PC1", ylab = "PC2", 
+     main = "Points in PC1/PC2 space")
+
+plot(pc_space[,1], pc_space[,3], 
+     xlab = "PC1", ylab = "PC3", 
+     main = "Points in PC1/PC3 space")
+
+plot(pc_space[,2], pc_space[,3], 
+     xlab = "PC2", ylab = "PC3", 
+     main = "Points in PC2/PC3 space")
+
+```
+
+### Impact of COHORT
+
+```{r}
+
+
+plot(pc_space[,1], pc_space[,2], 
+     xlab = "PC1", ylab = "PC2", 
+     main = "Points in PC1/PC2 space",
+     col = ifelse(df_clinical$COHORT == "Postmortem", "red", "blue"))
+
+legend("topright", legend = c("PM", "OPO"), 
+       col = c("red", "blue"), pch = 1, title = "COHORT")
+
+plot(pc_space[,1], pc_space[,3], 
+     xlab = "PC1", ylab = "PC3", 
+     main = "Points in PC1/PC3 space",
+     col = ifelse(df_clinical$COHORT == "Postmortem", "red", "blue"))
+
+legend("topright", legend = c("PM", "OPO"), 
+       col = c("red", "blue"), pch = 1, title = "COHORT")
+
+plot(pc_space[,2], pc_space[,3], 
+     xlab = "PC2", ylab = "PC3", 
+     main = "Points in PC2/PC3 space",
+     col = ifelse(df_clinical$COHORT == "Postmortem", "red", "blue"))
+
+legend("topright", legend = c("PM", "OPO"), 
+       col = c("red", "blue"), pch = 1, title = "COHORT")
+```
+
+### Impact of SEX
+
+```{r}
+pc_space <- as.matrix(normalized_df) %*% pca_result$rotation[, 1:3]
+
+
+plot(pc_space[,1], pc_space[,2], 
+     xlab = "PC1", ylab = "PC2", 
+     main = "Points in PC1/PC2 space",
+     col = ifelse(df_clinical$SEX == 1, "blue", "red"))
+
+legend("topright", legend = c("Male", "Female"), 
+       col = c("blue", "red"), pch = 1, title = "SEX")
+
+plot(pc_space[,1], pc_space[,3], 
+     xlab = "PC1", ylab = "PC3", 
+     main = "Points in PC1/PC3 space",
+     col = ifelse(df_clinical$SEX == 1, "blue", "red"))
+
+legend("topright", legend = c("Male", "Female"), 
+       col = c("blue", "red"), pch = 1, title = "SEX")
+
+plot(pc_space[,2], pc_space[,3], 
+     xlab = "PC2", ylab = "PC3", 
+     main = "Points in PC2/PC3 space",
+     col = ifelse(df_clinical$SEX == 1, "blue", "red"))
+
+legend("topright", legend = c("Male", "Female"), 
+       col = c("blue", "red"), pch = 1, title = "SEX")
+
+```
+
+### Impact of DTHVNT
+
+```{r}
+values <- c(0, 1, 98, 99)
+colors <- c("blue", "red", "green", "yellow")
+
+valid_values <- c(0, 1)
+valid_colors <- colors[1:2]
+
+plot(pc_space[,1], pc_space[,2], 
+     xlab = "PC1", ylab = "PC2", 
+     main = "Points in PC1/PC2 space",
+     col = valid_colors[match(df_clinical$DTHVNT, valid_values)])
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHVNT")
+
+plot(pc_space[,1], pc_space[,3], 
+     xlab = "PC1", ylab = "PC3", 
+     main = "Points in PC1/PC3 space",
+     col = valid_colors[match(df_clinical$DTHVNT, valid_values)])
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHVNT")
+
+plot(pc_space[,2], pc_space[,3], 
+     xlab = "PC2", ylab = "PC3", 
+     main = "Points in PC2/PC3 space",
+     col = valid_colors[match(df_clinical$DTHVNT, valid_values)])
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHVNT")
+```
+
+### Impact of DTHRRDY
+
+```{r}
+values <- c(0, 1, 2, 3, 4)  
+colors <- c("blue", "red", "green", "yellow", "gray")  
+
+valid_values <- intersect(values, unique(df_clinical$DTHHRDY))  
+valid_colors <- colors[match(valid_values, values)] 
+
+plot(pc_space[,1], pc_space[,2], 
+     xlab = "PC1", ylab = "PC2", 
+     main = "Points in PC1/PC2 space",
+     col = colors[match(df_clinical$DTHHRDY, values)])
+
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHHRDY")
+
+plot(pc_space[,1], pc_space[,3], 
+     xlab = "PC1", ylab = "PC3", 
+     main = "Points in PC1/PC3 space",
+     col = colors[match(df_clinical$DTHHRDY, values)])
+
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHHRDY")
+
+
+plot(pc_space[,2], pc_space[,3], 
+     xlab = "PC2", ylab = "PC3", 
+     main = "Points in PC2/PC3 space",
+     col = colors[match(df_clinical$DTHHRDY, values)])
+
+legend("topright", legend = valid_values, 
+       col = valid_colors, pch = 1, title = "DTHHRDY")
+
+```
+
+# Statistical tests
+
+## COHORT
+
+We perform a t-test for the 2 cause of deaths
+
+```{r}
+t_test_results <- data.frame(Numerical_Variable = character(0), P_Value = numeric(0))
+
+for (variable in names(columns_to_plot)) {
+
+  t_test_result <- t.test(columns_to_plot[[variable]][df_clinical$COHORT == 'Organ Donor (OPO)'],
+                           columns_to_plot[[variable]][df_clinical$COHORT == 'Postmortem'])
+
+  t_test_results <- rbind(t_test_results, 
+                          data.frame(Numerical_Variable = variable, 
+                                     P_Value = t_test_result$p.value))
+}
+print(t_test_results)
+```
+
+## SEX
+
+We perform a t-test for the 2 sexes
+
+```{r}
+t_test_results <- data.frame(Numerical_Variable = character(0), P_Value = numeric(0))
+
+for (variable in names(columns_to_plot)) {
+
+  t_test_result <- t.test(columns_to_plot[[variable]][df_clinical$SEX == 1],
+                           columns_to_plot[[variable]][df_clinical$SEX == 2])
+
+  t_test_results <- rbind(t_test_results, 
+                          data.frame(Numerical_Variable = variable, 
+                                     P_Value = t_test_result$p.value))
+}
+
+print(t_test_results)
+
+```
+
+
+## DTHVNT
+
+
+#Size of the the categorical subsets
+
+```{r}
+len_0 <- dim(df_clinical[df_clinical$DTHVNT == 0, ])[1]
+len_1 <- dim(df_clinical[df_clinical$DTHVNT == 1, ])[1]
+len_98 <- dim(df_clinical[df_clinical$DTHVNT == 98, ])[1]
+len_99 <- dim(df_clinical[df_clinical$DTHVNT == 99, ])[1]
+
+print(paste(len_0, len_1, len_98, len_99))
+```
+
+
+### t-test because 99 and 98 are filtered
+```{r}
+t_test_results <- data.frame(Numerical_Variable = character(0), P_Value = numeric(0))
+
+for (variable in names(columns_to_plot)) {
+
+  t_test_result <- t.test(columns_to_plot[[variable]][df_clinical$DTHVNT == 0],
+                           columns_to_plot[[variable]][df_clinical$DTHVNT == 1])
+
+  t_test_results <- rbind(t_test_results, 
+                          data.frame(Numerical_Variable = variable, 
+                                     P_Value = t_test_result$p.value))
+}
+
+print(t_test_results)
+```
+
+## DTHHRDY
+
+Size of the the categorical subsets
+
+```{r}
+len_0 <- dim(df_clinical[df_clinical$DTHHRDY== 0, ])[1]
+len_1 <- dim(df_clinical[df_clinical$DTHHRDY == 1, ])[1]
+len_2 <- dim(df_clinical[df_clinical$DTHHRDY == 2, ])[1]
+len_3 <- dim(df_clinical[df_clinical$DTHHRDY == 3, ])[1]
+len_4 <- dim(df_clinical[df_clinical$DTHHRDY == 4, ])[1]
+
+print(paste(len_0, len_1, len_2, len_3, len_4))
+```
+
+### ANOVA
+
+Since the categorical variable has more than 2 values, we first perform an ANOVA
+
+```{r}
+anova_results <- data.frame(Numerical_Variable = character(0), P_Value = numeric(0))
+
+for (variable in names(columns_to_plot)) {
+  anova_result <- aov(columns_to_plot[[variable]] ~ DTHHRDY, data = df_clinical)
+  p_value <- summary(anova_result)[[1]]$`Pr(>F)`
+  
+  anova_results <- rbind(anova_results, 
+                         data.frame(Numerical_Variable = variable, 
+                                    P_Value = p_value))
+}
+anova_results <- anova_results[!duplicated(anova_results$Numerical_Variable), ]
+print(anova_results)
+```
+
+
+
+Based on the results, need to do some paired t-tests for certain numerical variables
+
+### T-tests for AGE
+
+```{r}
+numerical_variable <- df_clinical$AGE
+
+categorical_variable <- df_clinical$DTHHRDY
+
+t_test_matrix <- matrix(NA, nrow = 5, ncol = 5,
+                        dimnames = list(levels(categorical_variable), levels(categorical_variable)))
+
+for (i in 1:4) {
+  for (j in (i + 1):5) {
+    subgroup_i <- numerical_variable[categorical_variable == i-1]
+    subgroup_j <- numerical_variable[categorical_variable == j-1]
+    t_test_result <- t.test(subgroup_i, subgroup_j)
+    t_test_matrix[i, j] <- t_test_result$p.value
+    t_test_matrix[j, i] <- t_test_result$p.value
+  }
+}
+
+print(t_test_matrix)
+```
+
+### T-tests for HGHT
+
+```{r}
+numerical_variable <- df_clinical$HGHT
+
+categorical_variable <- df_clinical$DTHHRDY
+
+t_test_matrix <- matrix(NA, nrow = 5, ncol = 5,
+                        dimnames = list(levels(categorical_variable), levels(categorical_variable)))
+
+for (i in 1:4) {
+  for (j in (i + 1):5) {
+    subgroup_i <- numerical_variable[categorical_variable == i-1]
+    subgroup_j <- numerical_variable[categorical_variable == j-1]
+    t_test_result <- t.test(subgroup_i, subgroup_j)
+    t_test_matrix[i, j] <- t_test_result$p.value
+    t_test_matrix[j, i] <- t_test_result$p.value
+  }
+}
+
+print(t_test_matrix)
+```
+
+### T-tests for TRISCHD
+
+```{r}
+numerical_variable <- df_clinical$TRISCHD
+
+categorical_variable <- df_clinical$DTHHRDY
+
+t_test_matrix <- matrix(NA, nrow = 5, ncol = 5,
+                        dimnames = list(levels(categorical_variable), levels(categorical_variable)))
+
+for (i in 1:4) {
+  for (j in (i + 1):5) {
+    subgroup_i <- numerical_variable[categorical_variable == i-1]
+    subgroup_j <- numerical_variable[categorical_variable == j-1]
+    t_test_result <- t.test(subgroup_i, subgroup_j)
+    t_test_matrix[i, j] <- t_test_result$p.value
+    t_test_matrix[j, i] <- t_test_result$p.value
+  }
+}
+
+print(t_test_matrix)
+```
+
+

@@ -1,0 +1,740 @@
+---
+title: "Project - Group 4"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+[Link to the instructions of the project](https://owncloud.ulb.ac.be/index.php/s/an85YFknNiDQXGA?path=%2Fresources#pdfviewer)  
+[Link to the information of the variables name](https://ftp.ncbi.nlm.nih.gov/dbgap/studies/phs000424/phs000424.v8.p2/pheno_variable_summaries/phs000424.v8.pht002742.v8.GTEx_Subject_Phenotypes.data_dict.xml)   
+Technical variable:  
+- COHORT(categorical)    
+- TRISCHD(numerical)   
+- DTHHRDY(categorical)    
+- DTHVNT(categorical)    
+Demographic/Health:  
+- AGE(numerical)   
+- SEX(categorical)       
+- HGHT(numerical)   
+- WGHT(numerical)   
+- BMI(numerical)   
+
+
+#Question 3
+
+```{r}
+#Installation of the Bioconductor + Installation of the DESeq2
+if (!requireNamespace('BiocManager', quietly = TRUE))
+    install.packages('BiocManager')
+BiocManager::install("DESeq2")
+```
+
+
+```{r}
+#Import all libraries
+library(readr)
+library(ggplot2)
+library(cowplot)
+library(DESeq2)
+library(dplyr) #install.packages("dplyr")
+library(pheatmap)
+library(tidyr)
+library(tibble)
+library(reshape2)
+```
+
+
+```{r}
+# Path to file (raw data)
+clinical_path <- "./TSV_files/raw/clinical_data.tsv" #Your path here
+df_clinical<- read.delim(clinical_path)
+
+morphological_path <- "./TSV_files/raw/morphological_counts_lunit_dino.tsv" #Your path here
+df_morphological<- read.delim(morphological_path)
+
+rna_path <- "./TSV_files/raw/RNA_read_counts.tsv" #Your path here
+df_rna<- read.delim(rna_path)
+
+
+# Path to file (Already processed data obtained in the previous questions)
+rna_filtered_path <- "./TSV_files/General/df_rna_filtered.tsv" #Your path here
+df_rna_filtered <- read.table(rna_filtered_path, header = TRUE, sep = "\t")
+
+rna_transposed_path <- "./TSV_files/General//df_rna_transposed.tsv" #Your path here
+transposed_df <- read.table(rna_transposed_path, header = TRUE, sep = "\t")
+```
+
+
+
+```{r}
+print(colnames(transposed_df))
+```
+
+
+Cleaning process
+```{r}
+#Cleaning PROCRESS:
+
+#Start with 56200 genes in total
+#First filter, genes that has a sum less than 10 is removed from the dataset (45675 genes left)
+
+df_rna_clean <- df_rna %>%
+  mutate(across(3:ncol(df_rna), as.numeric)) %>%
+  mutate(sum_expression = rowSums(across(3:ncol(df_rna)), na.rm = TRUE)) %>%
+  filter(sum_expression > 10) %>%
+  select(-sum_expression)
+
+str(df_rna_clean)
+
+
+
+#Second filter: calcul the MAD value for each gene (Median Absolute Deviation) because we want to keep the genes with the highest deviation and variability. In this case, we are going to use the log10(MAD +1), as explained in the project question as hint. Then, based on the histogram, a threshold is found (Q3) to separate the histogram into 2 different groups, with the highest and lowest value, to remove all the genes with the lowest variations. At the end, we only have 11382 genes left.
+
+median_expression <- apply(df_rna_clean[, 3:ncol(df_rna_clean)], 1, median, na.rm = TRUE)
+mad_values <- apply(df_rna_clean[, 3:ncol(df_rna_clean)], 1, function(x) {
+  median(abs(x - median(x, na.rm = TRUE)), na.rm = TRUE)
+})
+
+df_rna_clean$mad_value <- mad_values
+
+df_rna_clean$log10_mad_plus_1 <- log10(df_rna_clean$mad_value + 1)
+
+threshold_mad_log10 <- quantile(df_rna_clean$log10_mad_plus_1, 0.75, na.rm = TRUE)
+
+print(dim(df_rna_clean))
+print(head(df_rna_clean))
+
+histogram_plot <- ggplot(df_rna_clean, aes(x = log10_mad_plus_1)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of log10(MAD + 1)",
+       x = "log10(MAD + 1)",
+       y = "Frequency") +
+  geom_vline(aes(xintercept = threshold_mad_log10), color = "red", linetype = "dashed") +
+  geom_text(aes(x = threshold_mad_log10, y = Inf, label = paste("Threshold =", round(threshold_mad_log10, 2))), 
+            color = "red", angle = 90, vjust = 1.5, hjust = -0.5)
+
+print(histogram_plot)
+
+df_rna_high_variability <- df_rna_clean %>%
+  filter(log10_mad_plus_1 > threshold_mad_log10) %>%
+  select(-log10_mad_plus_1)
+
+print(dim(df_rna_high_variability))
+print(head(df_rna_high_variability))
+
+# write.table(df_rna_high_variability, file = "df_rna_filtered.tsv", sep = "\t", row.names = FALSE) #Uncomment to save it
+
+```
+
+Transposition et manipulation dataframe pour lancer l'analyse DeSeq2
+```{r}
+transposed_df <- as.data.frame(t(df_rna_filtered[, 1:ncol(df_rna_filtered)]))
+transposed_df <- cbind(SMPLID = colnames(df_rna_filtered[, 1:ncol(df_rna_filtered)]), transposed_df)
+colnames(transposed_df) <- transposed_df[2, ]
+
+colnames(transposed_df)[1] <- "SMPLID"
+
+transposed_df <- transposed_df[-c(1, 2), ]
+transposed_df <- transposed_df[-nrow(transposed_df), ]
+rownames(transposed_df) <- NULL
+#write.table(transposed_df, file = "df_rna_transposed.tsv", sep = "\t", row.names = FALSE) #Uncomment to save it
+```
+
+Run l'analyse DeSeq sur chaque gene (11382) pour chaque cluster
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+  
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds))
+}
+
+clinical_data <- transposed_df
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- colnames(morphological_data)[-1]
+
+variables <- colnames(clinical_data)[-1]
+results_list <- list()
+skipped_genes <- list()
+
+for (var in variables) {
+  col_data <- DataFrame(col = clinical_data[[var]])
+  names(col_data) <- var
+  rownames(col_data) <- clinical_data$SMPLID
+  
+  if (nrow(col_data) == 0 || sum(complete.cases(col_data)) == 0) {
+    skipped_genes[[length(skipped_genes) + 1]] <- var
+  } else {
+    res <- tryCatch({
+      run_deseq(paste0("~ ", var), count_matrix, col_data)
+    }, error = function(e) {
+      message("Failed to run DESeq2 for variable: ", var, "; Error: ", e$message)
+      NULL
+    })
+
+    if (!is.null(res) && !any(is.na(res$padj))) {
+      results_list[[var]] <- res
+    } else {
+      skipped_genes[[length(skipped_genes) + 1]] <- var
+    }
+  }
+}
+
+dir.create("Cluster_2001_tot", showWarnings = FALSE)
+
+for (cluster_idx in 0:31) {
+  cluster_results <- data.frame(matrix(ncol = 7, nrow = 0))
+  colnames(cluster_results) <- c("Genes", "BaseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+  
+  for (gene in variables) {
+    gene_results <- results_list[[gene]][cluster_idx + 1, ]
+    
+    row_values <- c(
+      gene,
+      if(length(gene_results$baseMean) > 0) gene_results$baseMean else NA,
+      if(length(gene_results$log2FoldChange) > 0) gene_results$log2FoldChange else NA,
+      if(length(gene_results$lfcSE) > 0) gene_results$lfcSE else NA,
+      if(length(gene_results$stat) > 0) gene_results$stat else NA,
+      if(length(gene_results$pvalue) > 0) gene_results$pvalue else NA,
+      if(length(gene_results$padj) > 0) gene_results$padj else NA
+    )
+    
+    temp_df <- as.data.frame(t(row_values), stringsAsFactors=FALSE)
+    colnames(temp_df) <- c("Genes", "BaseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+    cluster_results <- rbind(cluster_results, temp_df)
+  }
+  
+  #write.table(cluster_results, file = sprintf("Cluster_2001_tot/Cluster%02d_results.tsv", cluster_idx), sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE) #Uncomment to save it
+}
+
+
+
+```
+
+Permet d'assembler les fichiers créés en 1 seul fichier (l'analyse précédente a été découpé en plusieurs parties pour pas run tout en 1 fois)
+```{r}
+folders <- c("Cluster_1_1000", "Cluster_1001_2000", "Cluster_2001_tot")
+
+for (i in 0:31) {
+  
+  cluster_file_name <- sprintf("Cluster%02d_results.tsv", i)
+  
+  temp_data_list <- lapply(folders, function(folder) {
+    file_path <- file.path(folder, cluster_file_name)
+    if (file.exists(file_path)) {
+      
+      read.table(file_path, header = TRUE, sep = "\t")
+    } else {
+      print("gfgggg")
+      NULL  
+    }
+  })
+  
+  temp_data_list <- Filter(Negate(is.null), temp_data_list)
+  
+  if (length(temp_data_list) > 0) {
+    combined_data <- do.call(rbind, temp_data_list)
+    
+    write.table(combined_data, sprintf("Cluster_tot/Cluster%02d_results.tsv", i), sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+  }
+}
+
+
+
+```
+
+Filtrage des valeurs NA obtenus lors de l'analyse (before: 11382 et after: 10279)
+```{r}
+input_folder <- "Cluster_tot"
+output_folder <- "Cluster_filtered"
+
+if (!dir.exists(output_folder)) {
+  dir.create(output_folder)
+}
+
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+
+for (file_path in files) {
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+
+  cat(sprintf("Taille avant filtrage de %s: %d lignes\n", basename(file_path), nrow(data)))
+
+  data_clean <- na.omit(data)
+
+  cat(sprintf("Taille après filtrage de %s: %d lignes\n", basename(file_path), nrow(data_clean)))
+
+  output_file_path <- file.path(output_folder, basename(file_path))
+
+  write.table(data_clean, output_file_path, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+}
+
+
+```
+
+Output matrix pour montrer le nombre de genes significatifs par cluster
+```{r}
+input_folder <- "Cluster_filtered" 
+
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+result_matrix <- matrix(nrow = length(files), ncol = 2, dimnames = list(NULL, c("Cluster", "Significant_Genes")))
+
+for (i in seq_along(files)) {
+  file_path <- files[i]
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+
+  significant_genes_count <- sum(data$padj < 0.05, na.rm = TRUE) #Value below 0.05 for padj
+  cluster_number <- as.numeric(sub(".*Cluster(\\d{2}).*", "\\1", basename(file_path)))
+  result_matrix[i, ] <- c(cluster_number, significant_genes_count)
+}
+
+print(result_matrix)
+
+```
+
+Calcul moyenne des rna count (not used)
+```{r}
+genes_file_path <- "./TSV_files/Cluster_filtered/Cluster00_results.tsv"  #Your path here
+genes_list <- read.table(genes_file_path, header = TRUE, sep = "\t")
+
+gene_names <- genes_list$Genes  
+results_df <- data.frame(Gene = character(), Mean = numeric(), stringsAsFactors = FALSE)
+
+all_genes_from_df_rna <- unique(df_rna$Description)
+
+gene_indices <- match(gene_names, all_genes_from_df_rna)
+
+df_rna_filtered <- df_rna[gene_indices, ]
+
+for (i in seq_along(gene_names)) {
+  gene <- gene_names[i]
+  gene_row <- df_rna_filtered[i, ]
+
+  if (!is.na(gene_row$Description) && nrow(gene_row) > 0) {
+    mean_value <- mean(as.numeric(gene_row[, 3:ncol(gene_row)]), na.rm = TRUE)
+    results_df <- rbind(results_df, data.frame(Gene = gene, Mean = mean_value))
+  } else {
+    results_df <- rbind(results_df, data.frame(Gene = gene, Mean = NA))
+  }
+}
+
+print(results_df)
+write.table(results_df, "Mean_Gene.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+```
+
+Matrix UP/DOWN regulated genes
+```{r}
+log2fc_threshold <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/Cluster_filtered" #Your path here
+
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+result_matrix <- matrix(nrow = length(files), ncol = 3, dimnames = list(NULL, c("Cluster", "Up_regulated_Genes", "Down_regulated_Genes")))
+
+for (i in seq_along(files)) {
+  file_path <- files[i]
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+
+  up_regulated_count <- sum(data$log2FoldChange > log2fc_threshold & data$padj < pval_threshold, na.rm = TRUE)
+  
+  down_regulated_count <- sum(data$log2FoldChange < -log2fc_threshold & data$padj < pval_threshold, na.rm = TRUE)
+
+  cluster_number <- as.numeric(sub(".*Cluster(\\d{2}).*", "\\1", basename(file_path)))
+
+  result_matrix[i, ] <- c(cluster_number, up_regulated_count, down_regulated_count)
+}
+
+print(result_matrix)
+
+```
+
+Creation matrix top regulated genes
+```{r}
+log2fc_threshold <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/Cluster_filtered" #Your path here
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+genes_file_path <- "./TSV_files/Cluster_filtered/Cluster00_results.tsv" #Your path here
+genes_list <- read.table(genes_file_path, header = TRUE, sep = "\t")
+unique_genes <- unique(genes_list$Genes)  # Ensure uniqueness
+
+gene_df <- data.frame(Gene = unique_genes)
+
+for (file_path in files) {
+    data <- read.table(file_path, header = TRUE, sep = "\t")
+    
+    up_regulated <- data[data$log2FoldChange > log2fc_threshold & data$padj < pval_threshold, ]
+
+    cluster_name <- sub(".*Cluster(\\d{2}).*", "\\1", basename(file_path))
+    gene_df[[paste0("Cluster_", cluster_name)]] <- 0  
+
+    if (length(up_regulated) > 0) {
+        gene_df[[paste0("Cluster_", cluster_name)]] <- ifelse(gene_df$Gene %in% up_regulated$Genes, 1, 0)
+    }
+}
+
+gene_df$Total_Up_Regulated <- rowSums(gene_df[, -1])
+
+top_genes_df <- gene_df[order(-gene_df$Total_Up_Regulated), ]
+#top_10_genes <- head(top_genes_df, 10)
+#print(top_10_genes)
+
+write.table(top_genes_df, "Top_Upregulated_Genes.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+```
+
+Creation matrix down regulated genes
+```{r}
+log2fc_threshold <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/Cluster_filtered" #Your path here
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+genes_file_path <- "./TSV_files/Cluster_filtered/Cluster00_results.tsv" #Your path here
+genes_list <- read.table(genes_file_path, header = TRUE, sep = "\t")
+unique_genes <- unique(genes_list$Genes)  
+
+gene_df <- data.frame(Gene = unique_genes)
+
+for (file_path in files) {
+    data <- read.table(file_path, header = TRUE, sep = "\t")
+    
+    down_regulated <- data[data$log2FoldChange < log2fc_threshold & data$padj < pval_threshold, ]
+
+    cluster_name <- sub(".*Cluster(\\d{2}).*", "\\1", basename(file_path))
+    gene_df[[paste0("Cluster_", cluster_name)]] <- 0  
+
+    if (length(down_regulated) > 0) {
+        gene_df[[paste0("Cluster_", cluster_name)]] <- ifelse(gene_df$Gene %in% down_regulated$Genes, 1, 0)
+    }
+}
+
+gene_df$Total_Up_Regulated <- rowSums(gene_df[, -1])
+
+top_genes_df <- gene_df[order(-gene_df$Total_Up_Regulated), ]
+#top_10_genes <- head(top_genes_df, 10)
+
+#print(top_10_genes)
+
+write.table(top_genes_df, "Top_Downregulated_Genes.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+Visualisation heatmap UP
+```{r}
+gene_data_path <- "./TSV_files/General/Top_Upregulated_Genes.tsv" #Your path here
+gene_df <- read.table(gene_data_path, header = TRUE, sep = "\t", check.names = FALSE)
+
+original_gene_order <- gene_df$Gene
+
+gene_df_long <- melt(gene_df, id.vars = "Gene", variable.name = "Cluster", value.name = "Regulated")
+
+gene_df_long <- gene_df_long[!grepl("Total_Up_Regulated", gene_df_long$Cluster),]
+
+gene_matrix <- dcast(gene_df_long, Gene ~ Cluster, value.var = "Regulated")
+gene_matrix <- as.matrix(gene_matrix[, -1]) 
+rownames(gene_matrix) <- original_gene_order 
+
+rownames(gene_matrix) <- gene_df_long$Gene[!duplicated(gene_df_long$Gene)] 
+gene_matrix <- gene_matrix[order(rownames(gene_matrix)), ]
+
+png("enhanced_heatmap.png", width = 1600, height = 1200)
+
+heatmap(gene_matrix, Colv = NA, Rowv = NA, scale = "none", 
+        col = c("black", "green"),  
+        margins = c(10, 15), 
+        xlab = "Clusters", ylab = "Genes", cexRow = 0.5, cexCol = 0.5) 
+
+dev.off()
+
+```
+
+Visualisation heatmap DOWN
+```{r}
+gene_data_path <- "./TSV_files/General/Top_Downregulated_Genes.tsv" #Your path here
+gene_df <- read.table(gene_data_path, header = TRUE, sep = "\t", check.names = FALSE)
+
+original_gene_order <- gene_df$Gene
+
+gene_df_long <- melt(gene_df, id.vars = "Gene", variable.name = "Cluster", value.name = "Regulated")
+
+gene_df_long <- gene_df_long[!grepl("Total_Up_Regulated", gene_df_long$Cluster),]
+
+gene_matrix <- dcast(gene_df_long, Gene ~ Cluster, value.var = "Regulated")
+gene_matrix <- as.matrix(gene_matrix[, -1]) 
+rownames(gene_matrix) <- original_gene_order
+
+rownames(gene_matrix) <- gene_df_long$Gene[!duplicated(gene_df_long$Gene)]  
+gene_matrix <- gene_matrix[order(rownames(gene_matrix)), ]
+
+png("enhanced_heatmap_down.png", width = 1600, height = 1200)  
+
+heatmap(gene_matrix, Colv = NA, Rowv = NA, scale = "none", 
+        col = c("black", "red"), 
+        margins = c(10, 15),  
+        xlab = "Clusters", ylab = "Genes", cexRow = 0.5, cexCol = 0.5)  
+
+dev.off()
+```
+
+
+
+
+
+
+REACTOME ANALYSIS
+
+Analyse fgsea (3.2) - Results in TSV files for each cluster
+```{r}
+library(fgsea)
+
+pathways.hallmark <- gmtPathways("./TSV_files/raw/reactome.gmt") #Your path here
+
+lapply(head(pathways.hallmark), head)
+
+input_folder <- "./TSV_files/Cluster_filtered" #Your path here
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+for (i in seq_along(files)) {
+  file_path <- files[i]
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+  
+  ranks <- setNames(data$stat, data$Genes)
+  
+  fgseaRes <- fgsea(pathways = pathways.hallmark, stats = ranks, nperm = 1000)
+  
+  fgseaResTidy <- as.data.frame(fgseaRes) %>% 
+    mutate(across(where(is.list), ~ sapply(., toString))) %>%  
+    arrange(desc(NES))
+
+  cluster_number_formatted <- sprintf("%02d", i - 1)  
+
+  output_path <- paste0("./TSV_files/fgsea_results/GSEA_results_Cluster_", cluster_number_formatted, ".tsv") #Your path here
+  write.table(fgseaResTidy, file = output_path, sep = "\t", row.names = FALSE, quote = FALSE)
+}
+
+
+
+
+```
+
+
+Output matrix - reactome significatif
+```{r}
+input_folder <- "./TSV_files/fgsea_results" #Your path here
+
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+print(files)
+
+result_matrix_fgsea <- matrix(nrow = length(files), ncol = 2, dimnames = list(NULL, c("Cluster", "Significant_Reactomes")))
+
+for (i in seq_along(files)) {
+  file_path <- files[i]
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+
+  significant_genes_count <- sum(data$padj < 0.05, na.rm = TRUE) 
+  cluster_number <- as.numeric(sub(".*_Cluster_(\\d+)\\.tsv", "\\1", basename(file_path)))
+  result_matrix_fgsea[i, ] <- c(cluster_number, significant_genes_count)
+}
+
+print(result_matrix_fgsea)
+```
+
+Output matrix - Reactome UP/DOWN
+```{r}
+nes <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/fgsea_results" #Your path here
+
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+result_matrix_fgsea_up_down <- matrix(nrow = length(files), ncol = 3, dimnames = list(NULL, c("Cluster", "Up_reactome", "Down_reactome")))
+
+for (i in seq_along(files)) {
+  file_path <- files[i]
+  data <- read.table(file_path, header = TRUE, sep = "\t")
+
+  up_regulated_count <- sum(data$NES > nes & data$padj < pval_threshold, na.rm = TRUE)
+  
+  down_regulated_count <- sum(data$NES < nes & data$padj < pval_threshold, na.rm = TRUE)
+
+  cluster_number <-as.numeric(sub(".*_Cluster_(\\d+)\\.tsv", "\\1", basename(file_path)))
+
+  result_matrix_fgsea_up_down[i, ] <- c(cluster_number, up_regulated_count, down_regulated_count)
+}
+
+print(result_matrix_fgsea_up_down)
+```
+
+
+TOP matrix - reactome
+```{r}
+nes <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/fgsea_results" #Your path here
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+genes_file_path <- "./TSV_files/fgsea_results/GSEA_results_Cluster_00.tsv" #Your path here
+genes_list <- read.table(genes_file_path, header = TRUE, sep = "\t")
+unique_genes <- unique(genes_list$pathway)  
+
+gene_df <- data.frame(pathway = unique_genes)
+
+for (file_path in files) {
+    data <- read.table(file_path, header = TRUE, sep = "\t")
+    
+    up_regulated <- data[data$NES > nes & data$padj < pval_threshold, ]
+
+    cluster_name <- as.numeric(sub(".*_Cluster_(\\d+)\\.tsv", "\\1", basename(file_path)))
+    gene_df[[paste0("Cluster_", cluster_name)]] <- 0  
+
+    if (length(up_regulated) > 0) {
+        gene_df[[paste0("Cluster_", cluster_name)]] <- ifelse(gene_df$pathway %in% up_regulated$pathway, 1, 0)
+    }
+}
+
+gene_df$Total_Up_Regulated <- rowSums(gene_df[, -1])
+
+top_genes_df <- gene_df[order(-gene_df$Total_Up_Regulated), ]
+#top_10_genes <- head(top_genes_df, 10)
+
+#print(top_10_genes)
+write.table(top_genes_df, "Top_Upregulated_Reactome.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+DOWN matrix - reactome
+```{r}
+nes <- 0
+pval_threshold <- 0.05
+
+input_folder <- "./TSV_files/fgsea_results" #Your path here 
+files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- sort(files)
+
+genes_file_path <- "./TSV_files/fgsea_results/GSEA_results_Cluster_00.tsv" #Your path here
+genes_list <- read.table(genes_file_path, header = TRUE, sep = "\t")
+unique_genes <- unique(genes_list$pathway)  
+
+gene_df <- data.frame(pathway = unique_genes)
+
+for (file_path in files) {
+    data <- read.table(file_path, header = TRUE, sep = "\t")
+    
+    up_regulated <- data[data$NES < nes & data$padj < pval_threshold, ]
+
+    cluster_name <- as.numeric(sub(".*_Cluster_(\\d+)\\.tsv", "\\1", basename(file_path)))
+    gene_df[[paste0("Cluster_", cluster_name)]] <- 0  
+
+    if (length(up_regulated) > 0) {
+        gene_df[[paste0("Cluster_", cluster_name)]] <- ifelse(gene_df$pathway %in% up_regulated$pathway, 1, 0)
+    }
+}
+
+gene_df$Total_Up_Regulated <- rowSums(gene_df[, -1])
+
+top_genes_df <- gene_df[order(-gene_df$Total_Up_Regulated), ]
+#top_10_genes <- head(top_genes_df, 10)
+
+#print(top_10_genes)
+
+write.table(top_genes_df, "Top_Downregulated_Reactome.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+Visualisation heatmap UP - Reactome
+```{r}
+gene_data_path <- "./TSV_files/General/Top_Upregulated_Reactome.tsv" #Your path here
+gene_df <- read.table(gene_data_path, header = TRUE, sep = "\t", check.names = FALSE)
+
+original_gene_order <- gene_df$pathway
+
+gene_df_long <- melt(gene_df, id.vars = "pathway", variable.name = "Cluster", value.name = "Regulated")
+
+gene_df_long <- gene_df_long[!grepl("Total_Up_Regulated", gene_df_long$Cluster),]
+
+gene_matrix <- dcast(gene_df_long, pathway ~ Cluster, value.var = "Regulated")
+gene_matrix <- as.matrix(gene_matrix[, -1]) 
+rownames(gene_matrix) <- original_gene_order 
+
+rownames(gene_matrix) <- gene_df_long$pathway[!duplicated(gene_df_long$pathway)] 
+gene_matrix <- gene_matrix[order(rownames(gene_matrix)), ] 
+
+png("enhanced_heatmap_reactome.png", width = 1600, height = 1200)  
+
+heatmap(gene_matrix, Colv = NA, Rowv = NA, scale = "none", 
+        col = c("black", "green"),  
+        margins = c(10, 15),  
+        xlab = "Clusters", ylab = "Pathway", cexRow = 0.5, cexCol = 0.5) 
+
+dev.off()
+
+```
+
+Visualisation heatmap DOWN - Reactome
+```{r}
+gene_data_path <- "./TSV_files/General/Top_Downregulated_Reactome.tsv" #Your path here
+gene_df <- read.table(gene_data_path, header = TRUE, sep = "\t", check.names = FALSE)
+
+original_gene_order <- gene_df$pathway
+
+gene_df_long <- melt(gene_df, id.vars = "pathway", variable.name = "Cluster", value.name = "Regulated")
+
+gene_df_long <- gene_df_long[!grepl("Total_Up_Regulated", gene_df_long$Cluster),]
+
+gene_matrix <- dcast(gene_df_long, pathway ~ Cluster, value.var = "Regulated")
+gene_matrix <- as.matrix(gene_matrix[, -1]) 
+rownames(gene_matrix) <- original_gene_order
+
+rownames(gene_matrix) <- gene_df_long$pathway[!duplicated(gene_df_long$pathway)]  
+gene_matrix <- gene_matrix[order(rownames(gene_matrix)), ] 
+
+png("enhanced_heatmap_reactome_down.png", width = 1600, height = 1200)  
+
+heatmap(gene_matrix, Colv = NA, Rowv = NA, scale = "none", 
+        col = c("black", "red"), 
+        margins = c(10, 15),  
+        xlab = "Clusters", ylab = "Pathway", cexRow = 0.5, cexCol = 0.5)  
+
+dev.off()
+
+```
+
+
+
+
+
+
+
