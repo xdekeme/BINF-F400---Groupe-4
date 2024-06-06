@@ -8,6 +8,7 @@ output:
 
 [Link to the instructions of the project](https://owncloud.ulb.ac.be/index.php/s/an85YFknNiDQXGA?path=%2Fresources#pdfviewer)
 
+Librairies
 ```{r}
 library(readr)
 library(ggplot2)
@@ -16,28 +17,31 @@ library(reshape2)
 library(tidyr)
 ```
 
+
+
+Global variables - PATH FOR COMPUTER
+```{r}
+general_folder_local_path <- "" #COMPLETE HERE THE PATH
+```
+
+Path definition and global values
+```{r}
+# Path to file (raw data)
+clinical_path <- file.path(general_folder_local_path, "TSV_files", "raw", "clinical_data.tsv")
+df_clinical <- read.delim(clinical_path)
+
+morphological_path <- file.path(general_folder_local_path, "TSV_files", "raw", "morphological_counts_lunit_dino.tsv")
+df_morphological <- read.delim(morphological_path)
+
+rna_path <- file.path(general_folder_local_path, "TSV_files", "raw", "RNA_read_counts.tsv")
+df_rna <- read.delim(rna_path)
+```
+
+
+
 # Clinical dataframe analysis
-
-```{r}
-df_clinical<- read.delim("./TSV_files/raw/clinical_data.tsv") #Your path here
-
-head(df_clinical, n = 10)
-
-dim(df_clinical)
-
-summary(df_clinical)
-
-```
-
-```{r}
-print(names(df_clinical))
-
-```
-
 ```{r}
 # Histograms
-
-
 ggplot(df_clinical, aes(x = AGE)) +
   geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
   labs(x = "Age", y = "Frequency", title = "Histogram of Age")
@@ -58,17 +62,14 @@ ggplot(df_clinical, aes(x = TRISCHD)) +
   geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
   labs(x = "TRISCHD", y = "Frequency", title = "Histogram of TRISCHD")
 
-
 ```
-
-
-
 
 Useless columns : SMPLID, SUBJID, SMPTHNTS, SMPLID.1 \n
 
 Numerical columns : AGE, HGHT, WGHT, BMI, TRISCHD \n
 
 Categorical columns : COHORT, SEX, DTHVNT, DTHHRDY
+
 
 # Boxplots
 

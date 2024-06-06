@@ -1,0 +1,673 @@
+---
+title: "Project - Group 4"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+[Link to the instructions of the project](https://owncloud.ulb.ac.be/index.php/s/an85YFknNiDQXGA?path=%2Fresources#pdfviewer)  
+[Link to the information of the variables name](https://ftp.ncbi.nlm.nih.gov/dbgap/studies/phs000424/phs000424.v8.p2/pheno_variable_summaries/phs000424.v8.pht002742.v8.GTEx_Subject_Phenotypes.data_dict.xml)   
+Technical variable:  
+- COHORT(categorical)    
+- TRISCHD(numerical)   
+- DTHHRDY(categorical)    
+- DTHVNT(categorical)    
+Demographic/Health:  
+- AGE(numerical)   
+- SEX(categorical)       
+- HGHT(numerical)   
+- WGHT(numerical)   
+- BMI(numerical)   
+
+
+All librairies
+```{r}
+#Installation of the Bioconductor + Installation of the DESeq2
+if (!requireNamespace('BiocManager', quietly = TRUE))
+    install.packages('BiocManager')
+BiocManager::install("DESeq2")
+
+#Import all libraries
+library(readr)
+library(ggplot2)
+library(cowplot)
+library(DESeq2)
+library(dplyr) #install.packages("dplyr")
+library(pheatmap)
+```
+
+Global variables - PATH FOR COMPUTER
+```{r}
+general_folder_local_path <- "" #COMPLETE HERE THE PATH
+```
+
+
+Path definition and global values
+```{r}
+# Path to file (raw data)
+clinical_path <- file.path(general_folder_local_path, "TSV_files", "raw", "clinical_data.tsv")
+df_clinical <- read.delim(clinical_path)
+
+morphological_path <- file.path(general_folder_local_path, "TSV_files", "raw", "morphological_counts_lunit_dino.tsv")
+df_morphological <- read.delim(morphological_path)
+
+rna_path <- file.path(general_folder_local_path, "TSV_files", "raw", "RNA_read_counts.tsv")
+df_rna <- read.delim(rna_path)
+```
+
+
+
+
+Question 2.1:
+HEAT MAP - P-value clusters/variables
+```{r warning=FALSE}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds))
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+variables <- c("COHORT", "SEX", "AGE", "HGHT", "WGHT", "BMI", "DTHHRDY", "TRISCHD", "DTHVNT")
+p_values <- list()  
+
+for (var in variables) {
+  col_data <- DataFrame(
+    col = clinical_data[[var]]
+  )
+  
+  if (var %in% c("COHORT", "SEX", "DTHVNT", "DTHHRDY")) {
+    col_data$col <- factor(col_data$col)
+  }
+  
+  names(col_data) <- var  
+  rownames(col_data) <- clinical_data$SMPLID
+  
+  res <- run_deseq(paste0("~ ", var), count_matrix, col_data)
+  p_values[[var]] <- -log10(res$padj)
+}
+
+pval_matrix <- do.call(cbind, p_values)
+rownames(pval_matrix) <- paste0("Cluster", 0:31)
+colnames(pval_matrix) <- variables
+
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+breaks[1] <- 1.3 
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE,  # Display the values in the cells
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis")
+
+```
+
+Graphe distribution nombre de clusters significatifs par variable
+```{r}
+significance_threshold <- -log10(0.05)
+
+significant_counts <- colSums(pval_matrix > significance_threshold, na.rm = TRUE)
+
+significant_counts_df <- data.frame(
+  Variable = names(significant_counts),
+  Count = significant_counts
+)
+
+significant_counts_df <- significant_counts_df %>%
+  arrange(desc(Count))
+
+ggplot(significant_counts_df, aes(x = reorder(Variable, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Number of significant clusters per clinical variable",
+       x = "Clinical Variables",
+       y = "Number of Significant Clusters") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+ANALYSE: 5 premières variables, ventaliteur avant le mort, sexe, taille, poids et IBM n'ont pas de vrai impact sur la morphologies des tissus. Par contre, les 4 autres, age, temps d'attente pour récuperer le sample, type de mort et type de donneur ont un impact sur la morphologies des tissus car présent dans beaucoup de clusters différent. 
+
+Graphe distribution sur le nombre de variable significatives par cluster
+```{r}
+significance_threshold <- -log10(0.05)
+
+significant_cluster_counts <- rowSums(pval_matrix > significance_threshold, na.rm = TRUE)
+
+significant_cluster_counts_df <- data.frame(
+  Cluster = rownames(pval_matrix),
+  Count = significant_cluster_counts
+)
+
+significant_cluster_counts_df <- significant_cluster_counts_df %>%
+  arrange(desc(Count))
+
+ggplot(significant_cluster_counts_df, aes(x = reorder(Cluster, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Number of significant clinical variables per morphological cluster",
+       x = "Cluster",
+       y = "Number of significant clinical variables") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+ANALYSE: Intéressant et peut-être se dire qu'on peut retirer alors les clusters inutiles de notre analyse comme ceux avec 0 et tout significatif (voir même 1 et 7)
+
+
+
+
+
+Question 2.3:
+Analyse sur la variable AGE et ses variables confondues
+
+HeatMap: AGE + COHORT + TRISCHD
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds)$padj)
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  cohort = factor(clinical_data$COHORT),
+  trischid = as.numeric(clinical_data$TRISCHD)
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + cohort + trischid"  
+res <- run_deseq(formula, count_matrix, col_data)
+p_values <- -log10(res)  
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, dimnames = list(rownames(count_matrix), c("Interaction_AGE_COHORT_TRISCHD")))
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of 
+DESeq2 Analysis for AGE + COHORT + TRISCHD",
+         fontsize = 10,
+         angle_col = 0)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+OTHER:
+Graphes qui montrent les distrubutions au sein des clusters (plus informatifs)
+
+Graphes supplémentaires pour analyser la diversité des variables au sein des clusters
+```{r}
+significance_threshold <- -log10(0.05)
+
+significant_cluster_counts <- rowSums(pval_matrix > significance_threshold, na.rm = TRUE)
+
+significant_cluster_counts_df <- data.frame(
+  Cluster = rownames(pval_matrix),
+  Count = significant_cluster_counts
+)
+
+pval_matrix_with_counts <- data.frame(pval_matrix, SignificantCount = significant_cluster_counts)
+pval_matrix_grouped <- pval_matrix_with_counts %>%
+  group_by(SignificantCount)
+
+variable_counts_list <- list()
+
+for (significant_count in unique(significant_cluster_counts)) {
+  subset_matrix <- pval_matrix_with_counts[pval_matrix_with_counts$SignificantCount == significant_count, -ncol(pval_matrix_with_counts)]
+  
+  num_clusters_in_group <- nrow(subset_matrix)
+  
+  significant_variable_counts <- colSums(subset_matrix > significance_threshold, na.rm = TRUE)
+  significant_variable_counts_normalized <- significant_variable_counts / num_clusters_in_group
+  
+  variable_counts_list[[as.character(significant_count)]] <- significant_variable_counts_normalized
+}
+
+for (significant_count in names(variable_counts_list)) {
+  significant_variable_counts_df <- data.frame(
+    Variable = names(variable_counts_list[[significant_count]]),
+    NormalizedCount = variable_counts_list[[significant_count]]
+  )
+  
+  p <- ggplot(significant_variable_counts_df, aes(x = reorder(Variable, NormalizedCount), y = NormalizedCount)) +
+    geom_bar(stat = "identity", fill = "skyblue") +
+    theme_minimal() +
+    labs(title = paste("Nombre normalisé de variables cliniques significatives pour la tranche avec", significant_count, "clusters"),
+         x = "Variable Clinique",
+         y = "Nombre normalisé de clusters significatifs") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+
+
+```
+
+```{r}
+significance_threshold <- -log10(0.05)
+
+significant_cluster_counts <- rowSums(pval_matrix > significance_threshold, na.rm = TRUE)
+
+significant_cluster_counts_df <- data.frame(
+  Cluster = rownames(pval_matrix),
+  Count = significant_cluster_counts
+)
+
+pval_matrix_with_counts <- data.frame(pval_matrix, SignificantCount = significant_cluster_counts)
+
+valid_counts <- 1:7
+pval_matrix_filtered <- pval_matrix_with_counts[pval_matrix_with_counts$SignificantCount %in% valid_counts, ]
+
+variable_counts_list <- list()
+
+for (significant_count in valid_counts) {
+  subset_matrix <- pval_matrix_filtered[pval_matrix_filtered$SignificantCount == significant_count, -ncol(pval_matrix_filtered)]
+  
+  num_clusters_in_tranche <- nrow(subset_matrix)
+  
+  significant_variable_counts <- colSums(subset_matrix > significance_threshold, na.rm = TRUE)
+  significant_variable_counts_normalized <- significant_variable_counts / num_clusters_in_tranche
+  
+  variable_counts_list[[as.character(significant_count)]] <- significant_variable_counts_normalized
+}
+
+combined_variable_counts <- do.call(rbind, lapply(names(variable_counts_list), function(name) {
+  data.frame(
+    Variable = names(variable_counts_list[[name]]),
+    NormalizedCount = variable_counts_list[[name]],
+    SignificantCount = name
+  )
+}))
+
+ggplot(combined_variable_counts, aes(x = Variable, y = NormalizedCount, fill = SignificantCount)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Nombre normalisé de variables cliniques significatives par tranche de clusters",
+       x = "Variable Clinique",
+       y = "Nombre normalisé de clusters significatifs",
+       fill = "Tranche de Clusters") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+ANALYSE: Moins important: + Informatif et peut etre supporter nos explications
+
+HeatMap: AGE + COHORT
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds)$padj)
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  cohort = factor(clinical_data$COHORT)
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + cohort"  
+res <- run_deseq(formula, count_matrix, col_data)
+p_values <- -log10(res)  
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, dimnames = list(rownames(count_matrix), c("Interaction_AGE_COHORT")))
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+#breaks[1] <- 10
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis for AGE + COHORT",
+         angle_col = 0)
+
+```
+
+HeatMap: AGE + DTHHRDY
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds)$padj)
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  dthhrdy = factor(clinical_data$DTHHRDY)
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + dthhrdy" 
+res <- run_deseq(formula, count_matrix, col_data)
+p_values <- -log10(res) 
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, dimnames = list(rownames(count_matrix), c("Interaction_AGE_DTHHRDY")))
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+#breaks[1] <- 1.3 
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis for AGE + DTHHRDY",
+         angle_col = 0)
+
+```
+
+HeatMap: AGE + TRISCHD
+```{r}
+
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds)$padj)
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  trischd = clinical_data$TRISCHD
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + trischd" 
+res <- run_deseq(formula, count_matrix, col_data)
+p_values <- -log10(res)
+p_values[is.infinite(p_values)] <- max(p_values[!is.infinite(p_values)], na.rm = TRUE)
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, 
+                      dimnames = list(rownames(count_matrix), c("Interaction_AGE_TRISCHD")))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+if (min_pval == max_pval) {
+  min_pval <- min_pval - 0.1
+  max_pval <- max_pval + 0.1
+}
+breaks <- seq(1.3, max_pval, length.out = 102)
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis for AGE + TRISCHD",
+         angle_col = 0)
+
+```
+
+HeatMap: AGE + COHORT + DTHHRDY
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Erreur : la matrice de comptage ou les métadonnées sont vides après filtrage des NA.")
+  }
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds)$padj)
+}
+
+clinical_data <- read_tsv(clinical_path, show_col_types = FALSE)
+morphological_data <- read_tsv(morphological_path, show_col_types = FALSE)
+
+count_matrix <- t(as.matrix(morphological_data[, -1]))
+colnames(count_matrix) <- morphological_data$SMPLID
+rownames(count_matrix) <- paste0("Cluster", 0:31)
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  cohort = factor(clinical_data$COHORT),
+  dthhrdy = factor(clinical_data$DTHHRDY)
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + cohort + dthhrdy"  
+res <- run_deseq(formula, count_matrix, col_data)
+p_values <- -log10(res)  
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, dimnames = list(rownames(count_matrix), c("Interaction_AGE_COHORT_DTHHRDY")))
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+#breaks[1] <- 1.3 
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis for AGE + COHORT + DTHHRDY",
+         angle_col = 0)
+
+```
+
+Heatmap: AGE + COHORT + DTHHRDY + TRISCHID
+```{r}
+run_deseq <- function(formula, count_matrix, col_data) {
+  print(formula)
+  
+  non_na_indices <- complete.cases(col_data)
+  filtered_count_matrix <- count_matrix[, non_na_indices, drop = FALSE]
+  filtered_col_data <- col_data[non_na_indices, , drop = FALSE]
+  
+  if (ncol(filtered_count_matrix) == 0 || nrow(filtered_col_data) == 0) {
+    stop("Error: Count matrix or metadata are empty after filtering NAs.")
+  }
+  
+  dds <- DESeqDataSetFromMatrix(countData = filtered_count_matrix, colData = filtered_col_data, design = as.formula(formula))
+  dds <- DESeq(dds)
+  
+  print(results(dds))
+  return(results(dds))
+}
+
+col_data <- DataFrame(
+  age = clinical_data$AGE,
+  cohort = factor(clinical_data$COHORT),
+  dthhrdy = factor(clinical_data$DTHHRDY),
+  trischid = as.numeric(clinical_data$TRISCHD)
+)
+rownames(col_data) <- clinical_data$SMPLID
+
+formula <- "~ age + cohort + dthhrdy + trischid" 
+res <- run_deseq(formula, count_matrix, col_data)
+
+p_values <- -log10(res$pvalue)  
+
+p_values[is.na(p_values)] <- 0
+p_values[is.infinite(p_values)] <- max(p_values, na.rm = TRUE) * 1.1
+
+pval_matrix <- matrix(p_values, nrow = length(p_values), ncol = 1, dimnames = list(rownames(count_matrix), c("Interaction_AGE_COHORT_DTHHRDY_TRISCHID")))
+print(dim(pval_matrix))
+print(head(pval_matrix))
+
+min_pval <- min(pval_matrix, na.rm = TRUE)
+max_pval <- max(pval_matrix, na.rm = TRUE)
+
+breaks <- seq(1.3, max_pval, length.out = 102) 
+
+colors <- c("white", colorRampPalette(c("white", "red"))(100))
+
+pheatmap(pval_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         display_numbers = TRUE, 
+         color = colors,
+         breaks = breaks,
+         main = "-log10(p-value adjusted) Heatmap of DESeq2 Analysis for AGE + COHORT + DTHHRDY + TRISCHID",
+         angle_col = 0)
+
+```
+
+
+
+
+
