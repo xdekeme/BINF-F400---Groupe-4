@@ -78,6 +78,7 @@ pval_threshold <- 0.05
 
 input_folder <- "result_folder" 
 
+input_folder_path <- file.path(general_folder_local_path, "TSV_files", "Result_Q3", "Result_Covariate_Cluster19_Morpho_log10_DeSeq2")
 genes_file_path <- file.path(general_folder_local_path, "TSV_files", "Result_Q3", "Mophological.cluster.G4_00_result.tsv")
 gene_data_up_path <- file.path(general_folder_local_path, "TSV_files", "Result_Q3", "Result_Genes", "Top_Upregulated_Genes.tsv")
 gene_data_down_path <- file.path(general_folder_local_path, "TSV_files", "Result_Q3", "Result_Genes", "Top_Downregulated_Genes.tsv") 
@@ -190,7 +191,7 @@ for (cluster in cluster_name) {
 
 Matrix UP/DOWN regulated genes + tot
 ```{r}
-files <- list.files(input_folder, pattern = "\\.tsv$", full.names = TRUE)
+files <- list.files(input_folder_path, pattern = "\\.tsv$", full.names = TRUE)
 files <- sort(files)
 
 result_matrix <- matrix(nrow = length(files), ncol = 4, dimnames = list(NULL, c("Cluster", "Up_regulated_Genes", "Down_regulated_Genes", "Total_significant")))
@@ -353,6 +354,9 @@ pathways.hallmark <- gmtPathways(reactom_gmt_path)
 
 
 input_folder_fgsea <- "fgsea_results" 
+
+input_folder_fgsea_path <- file.path(general_folder_local_path, "TSV_files", "Result_Q3", "fgsea_results")
+
 output_fgsea_results_path <- file.path(general_folder_local_path, "TSV_files", input_folder_fgsea, "GSEA_results_Cluster_")
 
 #File already created, to speed up the time process running
@@ -398,7 +402,7 @@ for (i in seq_along(files)) {
 
 Output matrix - Reactome UP/DOWN
 ```{r}
-files <- list.files(input_folder_fgsea, pattern = "\\.tsv$", full.names = TRUE)
+files <- list.files(input_folder_fgsea_path, pattern = "\\.tsv$", full.names = TRUE)
 files <- sort(files)
 
 result_matrix_fgsea_up_down <- matrix(nrow = length(files), ncol = 4, dimnames = list(NULL, c("Cluster", "Up_reactome", "Down_reactome", "Total_significant")))
